@@ -574,8 +574,8 @@ app.listen(PORT, () => {
 ║   🚀 SERVER SCRAPING ASTE IMMOBILIARI AVANZATO       ║
 ║                                                       ║
 ║   Porta: ${PORT}                                      ║
-║   Endpoint: http://localhost:${PORT}/api/scrape-all  ║
-║   Stats: http://localhost:${PORT}/api/stats          ║
+║   Endpoint: https://aste-backend.onrender.com  ║
+║   Stats: https://aste-backend.onrender.com          ║
 ║                                                       ║
 ║   ✅ Puppeteer: Attivo                               ║
 ║   ✅ Database: SQLite                                ║
