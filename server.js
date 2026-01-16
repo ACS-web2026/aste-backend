@@ -11,7 +11,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -574,8 +574,8 @@ app.listen(PORT, () => {
 ║   🚀 SERVER SCRAPING ASTE IMMOBILIARI AVANZATO       ║
 ║                                                       ║
 ║   Porta: ${PORT}                                      ║
-║   Endpoint: https://aste-backend.onrender.com  ║
-║   Stats: https://aste-backend.onrender.com          ║
+║   Endpoint (esempio): https://aste-backend-xxxx.onrender.com/api/scrape-all  ║
+║   Stats (esempio): https://aste-backend-xxxx.onrender.com/api/stats         ║
 ║                                                       ║
 ║   ✅ Puppeteer: Attivo                               ║
 ║   ✅ Database: SQLite                                ║
@@ -583,3 +583,4 @@ app.listen(PORT, () => {
 ╚═══════════════════════════════════════════════════════╝
   `);
 });
+
