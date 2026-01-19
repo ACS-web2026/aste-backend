@@ -12,10 +12,7 @@
     "cors": "^2.8.5",
     "axios": "^1.6.2",
     "cheerio": "^1.0.0-rc.12",
-    "better-sqlite3": "^9.2.2",
-    "node-cron": "^3.0.3",
-    "puppeteer-core": "^21.6.1",
-    "@sparticuz/chromium": "^119.0.2"
+    "node-cron": "^3.0.3"
   },
   "engines": {
     "node": ">=18.0.0"
