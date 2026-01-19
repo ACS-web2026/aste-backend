@@ -1,11 +1,10 @@
-// server.js - Versione LEGGERA per Render Free Tier
-// Solo Axios (no Puppeteer) - Build più veloce e leggero
+// server.js - Versione ULTRA-LEGGERA per Render Free Tier
+// Solo memoria (no database) per massima compatibilità
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const Database = require('better-sqlite3');
 const cron = require('node-cron');
 
 const app = express();
@@ -14,35 +13,11 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// ==================== DATABASE SETUP ====================
-const db = new Database('aste.db');
+// ==================== STORAGE IN MEMORIA ====================
+let annunciCache = [];
+let lastUpdate = null;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS annunci (
-    id TEXT PRIMARY KEY,
-    comune TEXT,
-    indirizzo TEXT,
-    dataAsta TEXT,
-    prezzo INTEGER,
-    tipologia TEXT,
-    descrizione TEXT,
-    link TEXT,
-    fonte TEXT,
-    lat REAL,
-    lng REAL,
-    ultimoAggiornamento DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS storico_prezzi (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    annuncio_id TEXT,
-    prezzo INTEGER,
-    data DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (annuncio_id) REFERENCES annunci(id)
-  );
-`);
-
-console.log('✓ Database inizializzato');
+console.log('✓ Server inizializzato (modalità in-memory)');
 
 // ==================== CONFIGURAZIONE SITI ====================
 const auctionSites = [
@@ -216,36 +191,25 @@ function extractTipologia(text) {
   return null;
 }
 
-// ==================== DATABASE ====================
-function saveToDatabase(results) {
-  const insertAnnuncio = db.prepare(`
-    INSERT OR REPLACE INTO annunci 
-    (id, comune, indirizzo, dataAsta, prezzo, tipologia, descrizione, link, fonte, lat, lng)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const insertStorico = db.prepare(`
-    INSERT INTO storico_prezzi (annuncio_id, prezzo) VALUES (?, ?)
-  `);
-
-  results.forEach(result => {
-    insertAnnuncio.run(
-      result.id, result.comune, result.indirizzo, result.dataAsta,
-      result.prezzo, result.tipologia, result.descrizione, result.link,
-      result.fonte, result.lat, result.lng
-    );
-    insertStorico.run(result.id, result.prezzo);
+// ==================== STORAGE IN MEMORIA ====================
+function saveToMemory(results) {
+  // Aggiungi nuovi risultati evitando duplicati
+  results.forEach(newResult => {
+    const exists = annunciCache.find(r => r.id === newResult.id);
+    if (!exists) {
+      annunciCache.push({
+        ...newResult,
+        timestamp: new Date().toISOString()
+      });
+    }
   });
-}
-
-function getStoricoPrezzi(annuncioId) {
-  const stmt = db.prepare(`
-    SELECT prezzo, DATE(data) as date 
-    FROM storico_prezzi 
-    WHERE annuncio_id = ? 
-    ORDER BY data ASC
-  `);
-  return stmt.all(annuncioId);
+  
+  // Mantieni solo ultimi 1000 annunci
+  if (annunciCache.length > 1000) {
+    annunciCache = annunciCache.slice(-1000);
+  }
+  
+  lastUpdate = new Date().toISOString();
 }
 
 // ==================== API ENDPOINTS ====================
@@ -274,50 +238,41 @@ app.post('/api/scrape-all', async (req, res) => {
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
-  // Salva in database
+  // Salva in memoria
   if (allResults.length > 0) {
-    saveToDatabase(allResults);
+    saveToMemory(allResults);
   }
 
-  // Arricchisci con storico prezzi
-  const enrichedResults = allResults.map(result => {
-    const history = getStoricoPrezzi(result.id);
-    return {
-      ...result,
-      priceHistory: history.length > 1 ? history : null
-    };
-  });
-
+  // Restituisci risultati (senza storico prezzi per ora)
   console.log('\n╔═══════════════════════════════════════════════╗');
-  console.log(`║  COMPLETATO: ${enrichedResults.length} annunci trovati      ║`);
+  console.log(`║  COMPLETATO: ${allResults.length} annunci trovati      ║`);
   console.log('╚═══════════════════════════════════════════════╝\n');
 
   res.json({
     success: true,
-    totalResults: enrichedResults.length,
+    totalResults: allResults.length,
     siteStatuses,
-    results: enrichedResults
+    results: allResults,
+    lastUpdate
   });
 });
 
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
-    message: 'Server attivo (versione leggera)',
-    version: 'axios-only',
-    uptime: process.uptime()
+    message: 'Server attivo (versione ultra-leggera)',
+    version: 'in-memory',
+    uptime: process.uptime(),
+    cachedResults: annunciCache.length,
+    lastUpdate
   });
 });
 
 app.get('/api/stats', (req, res) => {
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as total FROM annunci
-  `);
-  const result = stmt.get();
-  
   res.json({ 
-    totalAnnunci: result.total,
-    version: 'lightweight'
+    totalAnnunci: annunciCache.length,
+    version: 'ultra-lightweight',
+    lastUpdate
   });
 });
 
@@ -333,7 +288,7 @@ cron.schedule('0 3 * * *', async () => {
   }
   
   if (allResults.length > 0) {
-    saveToDatabase(allResults);
+    saveToMemory(allResults);
   }
   console.log(`✓ Completata: ${allResults.length} annunci`);
 });
@@ -342,17 +297,16 @@ cron.schedule('0 3 * * *', async () => {
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║   🚀 SERVER ASTE IMMOBILIARI (LEGGERO)               ║
+║   🚀 SERVER ASTE IMMOBILIARI (ULTRA-LEGGERO)         ║
 ║                                                       ║
 ║   Porta: ${PORT}                                      ║
-║   Versione: Axios-only (compatibile Render Free)    ║
-║   Database: SQLite                                   ║
+║   Versione: In-Memory (compatibile Render Free)     ║
+║   Storage: RAM (no database)                         ║
 ╚═══════════════════════════════════════════════════════╝
   `);
 });
 
 process.on('SIGTERM', () => {
   console.log('Chiusura server...');
-  db.close();
   process.exit(0);
 });
