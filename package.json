@@ -1,19 +1,21 @@
 {
   "name": "aste-backend",
   "version": "1.0.0",
-  "description": "Backend per scraping aste immobiliari",
+  "description": "Backend per scraping aste immobiliari - Ottimizzato",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo 'Build completato'"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "puppeteer": "^21.6.1",
-    "cheerio": "^1.0.0-rc.12",
     "axios": "^1.6.2",
-    "sqlite3": "^5.1.6",
-    "node-cron": "^3.0.3"
+    "cheerio": "^1.0.0-rc.12",
+    "better-sqlite3": "^9.2.2",
+    "node-cron": "^3.0.3",
+    "puppeteer-core": "^21.6.1",
+    "@sparticuz/chromium": "^119.0.2"
   },
   "engines": {
     "node": ">=18.0.0"
