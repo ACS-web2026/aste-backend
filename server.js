@@ -1,5 +1,5 @@
-// server.js - Versione ULTRA-LEGGERA per Render Free Tier
-// Solo memoria (no database) per massima compatibilità
+// server.js - Backend Ottimizzato con Parser Dedicati
+// Siti supportati: PVP Giustizia, Asta Legale, Aste Annunci, Astegiudiziarie.it
 
 const express = require('express');
 const cors = require('cors');
@@ -13,115 +13,266 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// ==================== STORAGE IN MEMORIA ====================
 let annunciCache = [];
 let lastUpdate = null;
 
-console.log('✓ Server inizializzato (modalità in-memory)');
+console.log('✓ Server inizializzato con parser dedicati');
 
-// ==================== CONFIGURAZIONE SITI ====================
+// ==================== CONFIGURAZIONE SITI CON PARSER DEDICATI ====================
 const auctionSites = [
-  { name: 'Asta Legale', url: 'https://www.astalegale.net/' },
-  { name: 'Asta Giudiziaria', url: 'https://www.astagiudiziaria.com/' },
-  { name: 'Aste Online', url: 'https://www.asteonline.it' },
-  { name: 'Aste Annunci', url: 'https://www.asteannunci.it/' },
-  { name: 'Fallimenti.it', url: 'https://www.fallimenti.it/' },
-  { name: 'Immobiliare Aste', url: 'https://aste.immobiliare.it' },
-  { name: 'PVP Giustizia', url: 'https://pvp.giustizia.it/pvp/' },
+  {
+    name: 'PVP Giustizia',
+    url: 'https://pvp.giustizia.it/pvp/it/ricerca_immobili.page',
+    parser: parsePVPGiustizia
+  },
+  {
+    name: 'Asta Legale',
+    url: 'https://www.astalegale.net/ricerca-aste',
+    parser: parseAstaLegale
+  },
+  {
+    name: 'Aste Annunci',
+    url: 'https://www.asteannunci.it/',
+    parser: parseAsteAnnunci
+  },
+  {
+    name: 'Astegiudiziarie.it',
+    url: 'https://www.astegiudiziarie.it/',
+    parser: parseAsteGiudiziarie
+  }
 ];
 
-// ==================== SCRAPING CON AXIOS ====================
-async function scrapeAxios(site, comuni = []) {
-  const startTime = Date.now();
-  
+// ==================== PARSER DEDICATO: PVP GIUSTIZIA ====================
+async function parsePVPGiustizia(comuni = []) {
+  const results = [];
   try {
-    const response = await axios.get(site.url, {
+    // PVP Giustizia richiede parametri specifici nella richiesta
+    const searchUrl = 'https://pvp.giustizia.it/pvp/it/ricerca_immobili.page';
+    
+    const response = await axios.get(searchUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8',
       },
-      timeout: 15000,
-      maxRedirects: 5
+      timeout: 15000
     });
 
     const $ = cheerio.load(response.data);
-    const results = [];
     
-    // Cerca contenitori comuni
-    const selectors = [
-      'article', '.card', '.listing', '.property', '.auction',
-      '[class*="asta"]', '[class*="immobile"]', '[class*="property"]',
-      '.result-item', '.ad-item'
-    ];
-    
-    let elements = $();
-    for (const selector of selectors) {
-      const found = $(selector);
-      if (found.length > 0) {
-        elements = found;
-        break;
-      }
-    }
-
-    elements.each((idx, element) => {
-      if (idx > 50) return; // Limita a 50 per performance
-      
-      const $el = $(element);
+    // PVP ha una struttura con tabelle o liste di vendite
+    $('.vendita-item, .procedura-item, tr.risultato, .asta-row').each((idx, el) => {
+      const $el = $(el);
       const text = $el.text();
-
-      // Estrazione dati
-      const comune = extractComune(text);
-      const prezzo = extractPrezzo(text);
-
-      if (!comune || !prezzo || prezzo < 10000) return;
-
-      // Filtra comuni se specificati
-      if (comuni.length > 0) {
-        const found = comuni.some(c => 
-          comune.toLowerCase().includes(c.toLowerCase()) || 
-          c.toLowerCase().includes(comune.toLowerCase())
-        );
-        if (!found) return;
+      
+      const comune = extractComune(text) || $el.find('.comune, .location, .localita').text().trim();
+      const indirizzo = extractIndirizzo(text) || $el.find('.indirizzo, .address').text().trim();
+      const prezzo = extractPrezzo(text) || extractPrezzoFromElement($el);
+      const data = extractData(text) || $el.find('.data-asta, .scadenza').text().trim();
+      const tipologia = extractTipologia(text) || 'Immobile';
+      
+      // Trova il link alla vendita
+      let link = $el.find('a').first().attr('href');
+      if (link && !link.startsWith('http')) {
+        link = 'https://pvp.giustizia.it' + link;
       }
-
-      const link = $el.find('a').attr('href') || site.url;
-      const fullLink = link.startsWith('http') ? link : new URL(link, site.url).href;
-
-      results.push({
-        id: `${site.name}-${idx}-${Date.now()}`,
-        comune,
-        indirizzo: extractIndirizzo(text) || 'Da verificare',
-        dataAsta: extractData(text) || 'Da definire',
-        prezzo,
-        tipologia: extractTipologia(text) || 'Immobile',
-        descrizione: text.substring(0, 200).trim().replace(/\s+/g, ' '),
-        link: fullLink,
-        fonte: site.name,
-        lat: null,
-        lng: null
-      });
+      
+      if (comune && prezzo && prezzo > 10000) {
+        // Verifica filtro comuni
+        if (comuni.length === 0 || matchesComune(comune, comuni)) {
+          results.push({
+            id: `pvp-${idx}-${Date.now()}`,
+            comune,
+            indirizzo: indirizzo || 'Da verificare',
+            dataAsta: data || 'Da definire',
+            prezzo,
+            tipologia,
+            descrizione: text.substring(0, 200).trim().replace(/\s+/g, ' '),
+            link: link || 'https://pvp.giustizia.it/pvp/',
+            fonte: 'PVP Giustizia',
+            lat: null,
+            lng: null
+          });
+        }
+      }
     });
-
-    const responseTime = Date.now() - startTime;
-    console.log(`  ✓ ${site.name}: ${results.length} annunci (${responseTime}ms)`);
     
-    return results;
-
+    console.log(`  ✓ PVP Giustizia: ${results.length} annunci`);
   } catch (error) {
-    const responseTime = Date.now() - startTime;
-    console.error(`  ✗ ${site.name}: ${error.message}`);
-    return [];
+    console.error(`  ✗ PVP Giustizia: ${error.message}`);
   }
+  return results;
 }
 
-// ==================== FUNZIONI DI ESTRAZIONE ====================
+// ==================== PARSER DEDICATO: ASTA LEGALE ====================
+async function parseAstaLegale(comuni = []) {
+  const results = [];
+  try {
+    const response = await axios.get('https://www.astalegale.net/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      timeout: 15000
+    });
+
+    const $ = cheerio.load(response.data);
+    
+    // Asta Legale ha card o articoli per ogni asta
+    $('article, .asta-card, .immobile-card, .property-item, .risultato-asta').each((idx, el) => {
+      const $el = $(el);
+      const text = $el.text();
+      
+      const comune = extractComune(text) || $el.find('.citta, .comune, .location').text().trim();
+      const indirizzo = extractIndirizzo(text) || $el.find('.indirizzo, .via').text().trim();
+      const prezzo = extractPrezzo(text) || extractPrezzoFromElement($el);
+      const data = extractData(text);
+      const tipologia = extractTipologia(text) || $el.find('.tipologia, .type').text().trim() || 'Immobile';
+      
+      let link = $el.find('a').first().attr('href');
+      if (link && !link.startsWith('http')) {
+        link = 'https://www.astalegale.net' + link;
+      }
+      
+      if (comune && prezzo && prezzo > 10000) {
+        if (comuni.length === 0 || matchesComune(comune, comuni)) {
+          results.push({
+            id: `astalegale-${idx}-${Date.now()}`,
+            comune,
+            indirizzo: indirizzo || 'Da verificare',
+            dataAsta: data || 'Da definire',
+            prezzo,
+            tipologia: tipologia || 'Immobile',
+            descrizione: text.substring(0, 200).trim().replace(/\s+/g, ' '),
+            link: link || 'https://www.astalegale.net/',
+            fonte: 'Asta Legale',
+            lat: null,
+            lng: null
+          });
+        }
+      }
+    });
+    
+    console.log(`  ✓ Asta Legale: ${results.length} annunci`);
+  } catch (error) {
+    console.error(`  ✗ Asta Legale: ${error.message}`);
+  }
+  return results;
+}
+
+// ==================== PARSER DEDICATO: ASTE ANNUNCI ====================
+async function parseAsteAnnunci(comuni = []) {
+  const results = [];
+  try {
+    const response = await axios.get('https://www.asteannunci.it/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      timeout: 15000
+    });
+
+    const $ = cheerio.load(response.data);
+    
+    $('.annuncio, .asta-item, .property, article.vendita, .immobile-box').each((idx, el) => {
+      const $el = $(el);
+      const text = $el.text();
+      
+      const comune = extractComune(text) || $el.find('.localita, .citta').text().trim();
+      const indirizzo = extractIndirizzo(text);
+      const prezzo = extractPrezzo(text) || extractPrezzoFromElement($el);
+      const data = extractData(text);
+      const tipologia = extractTipologia(text) || 'Immobile';
+      
+      let link = $el.find('a').first().attr('href');
+      if (link && !link.startsWith('http')) {
+        link = 'https://www.asteannunci.it' + link;
+      }
+      
+      if (comune && prezzo && prezzo > 10000) {
+        if (comuni.length === 0 || matchesComune(comune, comuni)) {
+          results.push({
+            id: `asteannunci-${idx}-${Date.now()}`,
+            comune,
+            indirizzo: indirizzo || 'Da verificare',
+            dataAsta: data || 'Da definire',
+            prezzo,
+            tipologia,
+            descrizione: text.substring(0, 200).trim().replace(/\s+/g, ' '),
+            link: link || 'https://www.asteannunci.it/',
+            fonte: 'Aste Annunci',
+            lat: null,
+            lng: null
+          });
+        }
+      }
+    });
+    
+    console.log(`  ✓ Aste Annunci: ${results.length} annunci`);
+  } catch (error) {
+    console.error(`  ✗ Aste Annunci: ${error.message}`);
+  }
+  return results;
+}
+
+// ==================== PARSER DEDICATO: ASTEGIUDIZIARIE.IT ====================
+async function parseAsteGiudiziarie(comuni = []) {
+  const results = [];
+  try {
+    const response = await axios.get('https://www.astegiudiziarie.it/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      timeout: 15000
+    });
+
+    const $ = cheerio.load(response.data);
+    
+    $('.risultato, .asta, article, .immobile, .property-card, .vendita-item').each((idx, el) => {
+      const $el = $(el);
+      const text = $el.text();
+      
+      const comune = extractComune(text) || $el.find('.comune, .city, .location').text().trim();
+      const indirizzo = extractIndirizzo(text);
+      const prezzo = extractPrezzo(text) || extractPrezzoFromElement($el);
+      const data = extractData(text);
+      const tipologia = extractTipologia(text) || 'Immobile';
+      
+      let link = $el.find('a').first().attr('href');
+      if (link && !link.startsWith('http')) {
+        link = 'https://www.astegiudiziarie.it' + link;
+      }
+      
+      if (comune && prezzo && prezzo > 10000) {
+        if (comuni.length === 0 || matchesComune(comune, comuni)) {
+          results.push({
+            id: `astegiud-${idx}-${Date.now()}`,
+            comune,
+            indirizzo: indirizzo || 'Da verificare',
+            dataAsta: data || 'Da definire',
+            prezzo,
+            tipologia,
+            descrizione: text.substring(0, 200).trim().replace(/\s+/g, ' '),
+            link: link || 'https://www.astegiudiziarie.it/',
+            fonte: 'Astegiudiziarie.it',
+            lat: null,
+            lng: null
+          });
+        }
+      }
+    });
+    
+    console.log(`  ✓ Astegiudiziarie.it: ${results.length} annunci`);
+  } catch (error) {
+    console.error(`  ✗ Astegiudiziarie.it: ${error.message}`);
+  }
+  return results;
+}
+
+// ==================== FUNZIONI HELPER DI ESTRAZIONE ====================
 function extractComune(text) {
   const patterns = [
-    /comune[\s:]+([A-Za-zàèéìòù\s]+?)(?=\s*[-,\n|])/i,
-    /(?:a|in)\s+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+)?)/,
-    /località[\s:]+([A-Za-zàèéìòù\s]+)/i,
-    /([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+)?)\s*\([A-Z]{2}\)/
+    /(?:comune|località|città)[\s:]+([A-Za-zàèéìòù'\s]+?)(?=\s*[-,\n|(]|$)/i,
+    /(?:a|in)\s+([A-Z][a-zàèéìòù']+(?:\s+[A-Z][a-zàèéìòù']+)?)/,
+    /([A-Z][a-zàèéìòù']+(?:\s+[A-Z][a-zàèéìòù']+)?)\s*\([A-Z]{2}\)/,
+    /località[\s:]+([A-Za-zàèéìòù'\s]+)/i
   ];
   
   for (const pattern of patterns) {
@@ -135,32 +286,37 @@ function extractComune(text) {
 }
 
 function extractIndirizzo(text) {
-  const match = text.match(/(via|piazza|corso|viale|strada|località)\s+[^,\n]+/i);
+  const match = text.match(/(via|piazza|corso|viale|strada|località|loc\.)\s+[^,\n]+/i);
   return match ? match[0].trim() : null;
 }
 
 function extractPrezzo(text) {
   const patterns = [
-    /€\s*([0-9]{1,3}(?:\.[0-9]{3})*)/,
-    /([0-9]{1,3}(?:\.[0-9]{3})*)\s*€/,
-    /prezzo[\s:]+([0-9]{1,3}(?:\.[0-9]{3})*)/i,
+    /€\s*([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})?)/,
+    /([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})?)\s*€/,
+    /(?:prezzo|base d'asta|valore)[\s:]+€?\s*([0-9]{1,3}(?:\.[0-9]{3})*)/i,
     /EUR\s*([0-9]{1,3}(?:\.[0-9]{3})*)/i
   ];
   
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      const prezzo = parseInt(match[1].replace(/\./g, ''));
+      const prezzo = parseInt(match[1].replace(/\./g, '').replace(/,/g, ''));
       if (prezzo > 1000) return prezzo;
     }
   }
   return null;
 }
 
+function extractPrezzoFromElement($el) {
+  const prezzoText = $el.find('.prezzo, .price, .importo, .valore, .base-asta').text();
+  return extractPrezzo(prezzoText);
+}
+
 function extractData(text) {
   const patterns = [
-    /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/,
-    /(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\s+(\d{4})/i
+    /(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/,
+    /(\d{1,2})\s+(gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic)[a-z]*\s+(\d{4})/i
   ];
   
   for (const pattern of patterns) {
@@ -176,12 +332,13 @@ function extractTipologia(text) {
     'villa': 'Villa',
     'villetta': 'Villa',
     'garage': 'Garage',
-    'box': 'Garage',
+    'box auto': 'Garage',
     'terreno': 'Terreno',
-    'locale': 'Locale Commerciale',
+    'locale commerciale': 'Locale Commerciale',
     'negozio': 'Negozio',
     'ufficio': 'Ufficio',
-    'magazzino': 'Magazzino'
+    'magazzino': 'Magazzino',
+    'capannone': 'Capannone'
   };
   
   const lower = text.toLowerCase();
@@ -191,9 +348,16 @@ function extractTipologia(text) {
   return null;
 }
 
+function matchesComune(comune, comuniTarget) {
+  const comuneLower = comune.toLowerCase();
+  return comuniTarget.some(target => 
+    comuneLower.includes(target.toLowerCase()) || 
+    target.toLowerCase().includes(comuneLower)
+  );
+}
+
 // ==================== STORAGE IN MEMORIA ====================
 function saveToMemory(results) {
-  // Aggiungi nuovi risultati evitando duplicati
   results.forEach(newResult => {
     const exists = annunciCache.find(r => r.id === newResult.id);
     if (!exists) {
@@ -204,7 +368,6 @@ function saveToMemory(results) {
     }
   });
   
-  // Mantieni solo ultimi 1000 annunci
   if (annunciCache.length > 1000) {
     annunciCache = annunciCache.slice(-1000);
   }
@@ -217,33 +380,39 @@ app.post('/api/scrape-all', async (req, res) => {
   const { comuni = [] } = req.body;
   
   console.log('\n╔═══════════════════════════════════════════════╗');
-  console.log('║  INIZIO RICERCA SU TUTTI I PORTALI           ║');
+  console.log('║  RICERCA CON PARSER DEDICATI                 ║');
   console.log('╚═══════════════════════════════════════════════╝\n');
   
   const allResults = [];
   const siteStatuses = [];
 
   for (const site of auctionSites) {
-    const results = await scrapeAxios(site, comuni);
-    allResults.push(...results);
-    
-    siteStatuses.push({
-      site: site.name,
-      status: results.length > 0 ? 'OK' : 'Nessun risultato',
-      count: results.length,
-      method: 'axios'
-    });
+    try {
+      const results = await site.parser(comuni);
+      allResults.push(...results);
+      
+      siteStatuses.push({
+        site: site.name,
+        status: results.length > 0 ? 'OK' : 'Nessun risultato',
+        count: results.length,
+        method: 'parser dedicato'
+      });
+    } catch (error) {
+      siteStatuses.push({
+        site: site.name,
+        status: `Errore: ${error.message}`,
+        count: 0,
+        method: 'parser dedicato'
+      });
+    }
 
-    // Pausa tra richieste
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
-  // Salva in memoria
   if (allResults.length > 0) {
     saveToMemory(allResults);
   }
 
-  // Restituisci risultati (senza storico prezzi per ora)
   console.log('\n╔═══════════════════════════════════════════════╗');
   console.log(`║  COMPLETATO: ${allResults.length} annunci trovati      ║`);
   console.log('╚═══════════════════════════════════════════════╝\n');
@@ -260,30 +429,36 @@ app.post('/api/scrape-all', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
-    message: 'Server attivo (versione ultra-leggera)',
-    version: 'in-memory',
+    message: 'Server con parser dedicati',
+    version: 'dedicated-parsers-v1',
     uptime: process.uptime(),
     cachedResults: annunciCache.length,
-    lastUpdate
+    lastUpdate,
+    sites: auctionSites.map(s => s.name)
   });
 });
 
 app.get('/api/stats', (req, res) => {
   res.json({ 
     totalAnnunci: annunciCache.length,
-    version: 'ultra-lightweight',
-    lastUpdate
+    version: 'dedicated-parsers',
+    lastUpdate,
+    sites: auctionSites.length
   });
 });
 
-// ==================== SCHEDULER ====================
+// Scheduler ogni notte alle 3:00
 cron.schedule('0 3 * * *', async () => {
-  console.log('⏰ Ricerca automatica programmata...');
+  console.log('⏰ Ricerca automatica...');
   const allResults = [];
   
   for (const site of auctionSites) {
-    const results = await scrapeAxios(site, []);
-    allResults.push(...results);
+    try {
+      const results = await site.parser([]);
+      allResults.push(...results);
+    } catch (error) {
+      console.error(`Errore ${site.name}:`, error.message);
+    }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   
@@ -293,15 +468,17 @@ cron.schedule('0 3 * * *', async () => {
   console.log(`✓ Completata: ${allResults.length} annunci`);
 });
 
-// ==================== AVVIO SERVER ====================
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║   🚀 SERVER ASTE IMMOBILIARI (ULTRA-LEGGERO)         ║
+║   🚀 SERVER ASTE CON PARSER DEDICATI                 ║
 ║                                                       ║
 ║   Porta: ${PORT}                                      ║
-║   Versione: In-Memory (compatibile Render Free)     ║
-║   Storage: RAM (no database)                         ║
+║   Siti: 4 con parser ottimizzati                     ║
+║   - PVP Giustizia (ufficiale)                        ║
+║   - Asta Legale                                      ║
+║   - Aste Annunci                                     ║
+║   - Astegiudiziarie.it                               ║
 ╚═══════════════════════════════════════════════════════╝
   `);
 });
